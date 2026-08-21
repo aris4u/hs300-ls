@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>理想约束选股</title>
+  <style>
+    :root {
+      --bg: #101218;
+      --panel: #171b24;
+      --panel-2: #1e2430;
+      --line: #2c3340;
+      --text: #e8eaed;
+      --muted: #8b93a1;
+      --focus: #4c8dff;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.45 "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    #app {
+      display: grid;
+      grid-template-rows: 56px 1fr 28px;
+      height: 100%;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .brand { display: flex; flex-direction: column; }
+    .brand b { font-size: 14px; letter-spacing: 0.04em; }
+    .brand span { color: var(--muted); font-size: 11px; }
+    main { overflow: auto; padding: 14px 18px 20px; }
+    footer {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 16px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+      background: var(--panel);
+    }
+    .warn {
+      background: #2a1f14;
+      border: 1px solid #5a4020;
+      color: #e8c48a;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin: 0 0 14px;
+      line-height: 1.55;
+    }
+    .overview {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px 10px;
+      margin: 0 0 14px;
+    }
+    .overview h2 { margin: 0 0 8px; font-size: 13px; }
+    .overview-name { font-size: 15px; font-weight: 700; margin: 0 0 10px; }
+    .overview dl {
+      display: grid;
+      grid-template-columns: 108px 1fr;
+      gap: 8px 12px;
+      margin: 0;
+    }
+    .overview dt { color: var(--muted); font-size: 12px; padding-top: 1px; }
+    .overview dd { margin: 0; line-height: 1.55; user-select: text; }
+    .section-h { margin: 16px 0 8px; font-size: 13px; font-weight: 650; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .stat {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+    .stat .k { color: var(--muted); font-size: 11px; }
+    .stat .v { font-size: 18px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .stat .v.pos { color: #e24c4c; }
+    .stat .v.neg { color: #22a06b; }
+    .chart {
+      background: #fff;
+      border-radius: 6px;
+      overflow: auto;
+      margin-bottom: 14px;
+    }
+    .chart img { display: block; width: 100%; height: auto; }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    th, td { text-align: right; padding: 5px 10px; border-bottom: 1px solid var(--line); }
+    th:first-child, td:first-child { text-align: left; }
+    td.pos { color: #e24c4c; }
+    td.neg { color: #3dd68c; }
+    .tabs { display: flex; gap: 4px; margin-left: 12px; }
+    .tab {
+      border: 1px solid var(--line);
+      background: transparent;
+      color: var(--muted);
+      border-radius: 4px;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+    .tab.on { color: var(--text); background: var(--panel-2); border-color: #4a5363; }
+    #view-frontier, #view-target { display: none; }
+    #app[data-view="frontier"] #view-book,
+    #app[data-view="target"] #view-book { display: none; }
+    #app[data-view="frontier"] #view-frontier { display: block; }
+    #app[data-view="target"] #view-target { display: block; }
+    tr.current td { background: #1a2436; }
+    #frontierTable tbody tr { cursor: pointer; }
+    #frontierTable tbody tr:hover td { background: #222a38; }
+    #frontierTable tbody tr.current:hover td { background: #243044; }
+    .hold-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .hold-grid h4 { margin: 0 0 8px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div id="app" data-view="book">
+    <header>
+      <div class="brand">
+        <b>理想约束选股</b>
+        <span id="asof">读取本地结果中…</span>
+      </div>
+      <div class="tabs">
+        <button class="tab on" data-view="book" type="button">回测</button>
+        <button class="tab" data-view="target" type="button">目标仓位</button>
+        <button class="tab" data-view="frontier" type="button">超额与回撤</button>
+      </div>
+    </header>
+    <main>
+    <div id="view-book">
+      <p class="warn" id="warn">
+        项目二已改成净多头、总敞口约 100%。弱市半仓而不是空仓；卖出计印花税，空头计年化 5% 融券。成交仍是 T+1。主图上看相对现金，以及「账本/沪深300」是否大于 1。不能和项目一那大约 4% 直接比。
+      </p>
+      <section class="overview">
+        <h2>方案概述</h2>
+        <div class="overview-name" id="overviewName">理想约束 · 净多头动量（规则事先固定）</div>
+        <dl>
+          <dt>仓位</dt><dd id="overviewPos">做多最高 5 只合计约 70%，做空最低 5 只合计约 30%。总敞口约 100%，净敞口约 +40%。沪深300低于 60 日均线时整体降到半仓，不再 100% 空仓。</dd>
+          <dt>公式</dt><dd>20 日价格动量，跳过最近 1 日。不跑通达信状态机。不对 2024-09 报告窗口搜参。</dd>
+          <dt>成交</dt><dd>T 日收盘出信号，T+1 日开盘成交。约每 21 个交易日换仓。</dd>
+          <dt>成本</dt><dd>佣金 3bp + 滑点 5bp + 印花税 10bp（卖出）。空头另计年化 5% 融券费。</dd>
+          <dt>怎么读</dt><dd id="overviewHow">上图蓝线是账本、灰线是沪深300，可以直接对比。中图大于 1 表示累计超过指数。净多头只有约 40%，牛市里仍可能一段时间低于满仓指数。</dd>
+          <dt>数据</dt><dd>只读项目一已经下好的沪深300成分前复权日K。当前成分名单，有幸存者偏差。</dd>
+        </dl>
+      </section>
+      <p class="note" id="note"></p>
+      <h3 class="section-h">回测结果</h3>
+      <div class="stats" id="stats"></div>
+      <h3 class="section-h">分段对照</h3>
+      <table id="periods"></table>
+      <div class="chart" id="chart"></div>
+      <h3 class="section-h">月度</h3>
+      <table id="month"></table>
+    </div>
+    <div id="view-target">
+      <p class="warn">
+        T 日收盘出信号，T+1 日开盘成交。这里是最近一次换仓锁定的目标仓位，用来核对公式，不是当日买卖建议。空头按融券假设。点「超额与回撤」里的行，这份名单会跟着换。
+      </p>
+      <section class="overview">
+        <h2>最近一次目标仓位</h2>
+        <div class="overview-name" id="targetScheme">理想约束 · 净多头动量</div>
+        <p class="note" id="targetNote"></p>
+        <dl id="targetMeta"></dl>
+      </section>
+      <div class="hold-grid">
+        <div>
+          <h4>做多</h4>
+          <table id="longs"></table>
+        </div>
+        <div>
+          <h4>做空</h4>
+          <table id="shorts"></table>
+        </div>
+      </div>
+    </div>
+    <div id="view-frontier">
+      <p class="warn">
+        同一套动量公式、同样 T+1 和成本，只改仓位。点一行，回测页换成该仓位的数字和净值图；（当前）永远在点中的那一行。示意图蓝点仍是产品默认 70/30 半仓。满仓只做多那条能到约 300% 相对超额，但回撤不再好看。
+      </p>
+      <p class="note" id="frontierNote"></p>
+      <h3 class="section-h">仓位结构对照</h3>
+      <table id="frontierTable"></table>
+      <h3 class="section-h">示意图</h3>
+      <div class="chart" id="frontierChart"></div>
+    </div>
+    </main>
+    <footer>规则提示，不是投资建议。项目一仍在 127.0.0.1:8765，只保留大A指数增强。</footer>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    function pct(x, d) {
+      if (x == null || Number.isNaN(Number(x))) return "—";
+      return (Number(x) * 100).toFixed(d == null ? 2 : d) + "%";
+    }
+    function signedPct(x, d) {
+      const n = Number(x);
+      const s = pct(n, d);
+      return n > 0 ? "+" + s : s;
+    }
+    function signClass(x) { return Number(x) >= 0 ? "pos" : "neg"; }
+
+    function positionBlurb(f) {
+      const lg = Number(f.long_gross);
+      const sg = Number(f.short_gross);
+      const rs = Number(f.risk_off_scale);
+      const longTxt = `做多最高 5 只合计约 ${(lg * 100).toFixed(0)}%`;
+      const shortTxt = sg > 0
+        ? `，做空最低 5 只合计约 ${(sg * 100).toFixed(0)}%。总敞口约 ${((lg + sg) * 100).toFixed(0)}%，净敞口约 ${((lg - sg) * 100).toFixed(0)}%。`
+        : "，不做空。";
+      const riskTxt = rs >= 1
+        ? "沪深300低于 60 日均线时也不降仓。"
+        : `沪深300低于 60 日均线时整体降到 ${(rs * 100).toFixed(0)}% 仓，不再 100% 空仓。`;
+      return longTxt + shortTxt + riskTxt;
+    }
+
+    function renderOverview(m) {
+      const f = m.frozen || {};
+      const name = m.scheme_name || m.product || "理想约束 · 净多头动量";
+      $("overviewName").textContent = name + "（规则事先固定）";
+      $("overviewPos").textContent = positionBlurb(f);
+      const net = (Number(f.long_gross || 0) - Number(f.short_gross || 0)) * 100;
+      $("overviewHow").textContent =
+        `上图蓝线是账本、灰线是沪深300，可以直接对比。中图大于 1 表示累计超过指数。净多头约 ${net.toFixed(0)}%，牛市里仍可能一段时间低于满仓指数。`;
+    }
+
+    function render(pack) {
+      if (!pack || !pack.ok) {
+        $("asof").textContent = "还没有回测";
+        $("note").textContent = (pack && pack.error) || "请先运行 python run_backtest.py";
+        $("stats").innerHTML = "";
+        $("chart").innerHTML = "";
+        $("periods").innerHTML = "";
+        $("month").innerHTML = "";
+        renderHoldings(null);
+        return;
+      }
+      const m = pack.metrics;
+      renderOverview(m);
+      $("asof").textContent = `${m.start} ~ ${m.end}　${m.days} 个交易日`;
+      $("note").textContent = m.note || "";
+      const train = (m.samples || {}).train || {};
+      const test = (m.samples || {}).test || {};
+      const rs = Number((m.frozen || {}).risk_off_scale);
+      const sizeLabel = Math.abs(rs - 0.5) < 1e-6 ? "弱市半仓日" : "弱市降仓日";
+      const cards = [
+        ["相对现金净值", signedPct(m.total_return), signClass(m.total_return)],
+        ["夏普", m.sharpe == null ? "—" : Number(m.sharpe).toFixed(2), signClass(m.sharpe)],
+        ["累计差 vs 300", signedPct(m.excess_additive), signClass(m.excess_additive)],
+        ["信息比率", m.information_ratio == null ? "—" : Number(m.information_ratio).toFixed(2), signClass(m.information_ratio)],
+        ["Train 净值", train.net_return == null ? "—" : signedPct(train.net_return), signClass(train.net_return)],
+        ["Test 净值", test.net_return == null ? "—" : signedPct(test.net_return), signClass(test.net_return)],
+        ["月超额胜率", pct(m.month_excess_win || 0, 0)],
+        ["净值低于指数", pct(m.under_index_share || 0, 0)],
+        [sizeLabel, pct(m.half_size_share || 0, 0)],
+        ["最大回撤", pct(m.max_drawdown), "neg"],
+      ];
+      $("stats").innerHTML = cards.map(([k, v, c]) =>
+        `<div class="stat"><div class="k">${k}</div><div class="v ${c || ""}">${v}</div></div>`
+      ).join("");
+      $("chart").innerHTML = pack.has_chart
+        ? `<img src="${pack.chart}?v=${Date.now()}" alt="理想约束净值" decoding="async" />`
+        : "";
+      const periods = m.periods || [];
+      $("periods").innerHTML = periods.length ? `
+        <thead><tr><th>分段</th><th>账本</th><th>沪深300</th><th>累计差</th></tr></thead>
+        <tbody>${periods.map((r) => `
+          <tr>
+            <td>${r.label}</td>
+            <td>${signedPct(r.strategy)}</td>
+            <td>${signedPct(r.hs300)}</td>
+            <td class="${signClass(r.excess_additive)}">${signedPct(r.excess_additive)}</td>
+          </tr>`).join("")}</tbody>` : "";
+      $("month").innerHTML = `
+        <thead><tr><th>月份</th><th>账本</th><th>沪深300</th><th>差</th></tr></thead>
+        <tbody>${(pack.monthly || []).map((r) => `
+          <tr>
+            <td>${r.month}</td>
+            <td>${signedPct(r.strategy)}</td>
+            <td>${signedPct(r.benchmark)}</td>
+            <td class="${signClass(r.excess)}">${signedPct(r.excess)}</td>
+          </tr>`).join("")}</tbody>`;
+      renderHoldings(pack.holdings);
+    }
+
+    function holdRows(rows) {
+      if (!rows || !rows.length) return "";
+      return rows.map((r) => `
+        <tr>
+          <td>${r.name || "—"}</td>
+          <td>${r.code || ""}</td>
+          <td class="${signClass(r.weight)}">${signedPct(r.weight)}</td>
+          <td>${r.score == null ? "—" : signedPct(r.score)}</td>
+        </tr>`).join("");
+    }
+
+    function renderHoldings(h) {
+      const name = (book && book.metrics && (book.metrics.scheme_name || book.metrics.product)) || "理想约束 · 净多头动量";
+      $("targetScheme").textContent = name;
+      if (!h || !h.ok) {
+        $("longs").innerHTML = "";
+        $("shorts").innerHTML = "";
+        $("targetMeta").innerHTML = "";
+        $("targetNote").textContent = (h && h.error) || "还没有目标仓位。请先运行 python run_backtest.py";
+        return;
+      }
+      $("targetNote").textContent = h.note || "";
+      const fill = h.fill_pending
+        ? "下一交易日开盘（样本已到末日）"
+        : (h.fill_date || "—");
+      const nextRb = h.next_rebalance_date
+        || (h.bars_to_next != null ? `约 ${h.bars_to_next} 个交易日后` : "样本内尚未到");
+      const risk = h.risk_off
+        ? `是（信号日沪深300低于 ${h.index_ma || 60} 日均线，仓位已按规则缩小）`
+        : "否（信号日按正常仓）";
+      const pairs = [
+        ["数据截至", h.asof || "—"],
+        ["信号日", h.signal_date || "—"],
+        ["下一开盘成交", fill],
+        ["下次换仓", nextRb],
+        ["弱市降仓", risk],
+        ["多头合计", signedPct(h.long_gross)],
+        ["空头合计", signedPct(h.short_gross)],
+        ["净敞口", signedPct(h.net_gross)],
+      ];
+      $("targetMeta").innerHTML = pairs.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+      const head = `<thead><tr><th>名称</th><th>代码</th><th>权重</th><th>动量</th></tr></thead>`;
+      $("longs").innerHTML = head + `<tbody>${holdRows(h.longs) || `<tr><td colspan="4">当日无多头</td></tr>`}</tbody>`;
+      $("shorts").innerHTML = head + `<tbody>${holdRows(h.shorts) || `<tr><td colspan="4">该仓位不做空，或当日无空头</td></tr>`}</tbody>`;
+    }
+
+    function renderFrontier(pack) {
+      if (!pack || !pack.ok) {
+        $("frontierNote").textContent = (pack && pack.error) || "还没有对照表。请先运行 python run_backtest.py";
+        $("frontierTable").innerHTML = "";
+        $("frontierChart").innerHTML = "";
+        return;
+      }
+      $("frontierNote").textContent = pack.note || "";
+      const rows = pack.rows || [];
+      $("frontierTable").innerHTML = `
+        <thead><tr>
+          <th>仓位</th><th>相对超额</th><th>累计差</th><th>报告回撤</th>
+          <th>Train 净值</th><th>Train 回撤</th><th>报告净值</th><th>夏普</th>
+        </tr></thead>
+        <tbody>${rows.map((r) => {
+          const on = r.id === selectedId;
+          return `
+          <tr class="${on ? "current" : ""}" data-id="${r.id}">
+            <td>${r.name}${on ? "（当前）" : ""}</td>
+            <td class="${signClass(r.report_excess_relative)}">${signedPct(r.report_excess_relative)}</td>
+            <td class="${signClass(r.report_excess_additive)}">${signedPct(r.report_excess_additive)}</td>
+            <td class="neg">${pct(r.report_dd)}</td>
+            <td class="${signClass(r.train_nav)}">${signedPct(r.train_nav)}</td>
+            <td class="neg">${pct(r.train_dd)}</td>
+            <td class="${signClass(r.report_nav)}">${signedPct(r.report_nav)}</td>
+            <td>${r.report_sharpe == null ? "—" : Number(r.report_sharpe).toFixed(2)}</td>
+          </tr>`;
+        }).join("")}</tbody>`;
+      $("frontierTable").querySelectorAll("tbody tr").forEach((tr) => {
+        tr.onclick = () => selectScheme(tr.dataset.id, true);
+      });
+      if (pack.has_chart) {
+        if (!$("frontierChart").querySelector("img")) {
+          $("frontierChart").innerHTML = `<img src="${pack.chart}?v=${pack.updated || ""}" alt="超额与回撤对照" decoding="async" />`;
+        }
+      } else {
+        $("frontierChart").innerHTML = "";
+      }
+    }
+
+    function selectScheme(id, goBook) {
+      if (!id) return;
+      selectedId = id;
+      const pack = frontier && frontier.schemes && frontier.schemes[id];
+      if (pack && pack.ok) {
+        book = pack;
+        render(pack);
+      }
+      if (frontier) renderFrontier(frontier);
+      if (goBook) setView("book");
+    }
+
+    function setView(v) {
+      $("app").dataset.view = v;
+      document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.dataset.view === v));
+      if (v === "frontier") {
+        if (frontier) {
+          $("asof").textContent = frontier.start && frontier.end
+            ? `${frontier.start} ~ ${frontier.end}　仓位对照`
+            : "超额与回撤";
+          renderFrontier(frontier);
+        } else $("asof").textContent = "超额与回撤";
+      } else if (v === "target") {
+        const h = book && book.holdings;
+        $("asof").textContent = h && h.asof ? `数据截至 ${h.asof}　目标仓位` : "目标仓位";
+        renderHoldings(h);
+      } else if (book && book.ok && book.metrics) {
+        const m = book.metrics;
+        $("asof").textContent = `${m.start} ~ ${m.end}　${m.days} 个交易日`;
+      }
+    }
+
+    let book = null;
+    let frontier = null;
+    let selectedId = "now";
+    document.querySelectorAll(".tab").forEach((t) => {
+      t.onclick = () => setView(t.dataset.view);
+    });
+
+    fetch("/api/book").then((r) => r.json()).then((d) => { book = d; render(d); }).catch((err) => {
+      render({ ok: false, error: String(err) });
+    });
+    fetch("/api/frontier").then((r) => r.json()).then((d) => {
+      frontier = d;
+      if ($("app").dataset.view === "frontier") setView("frontier");
+    }).catch(() => {});
+  </script>
+</body>
+</html>
