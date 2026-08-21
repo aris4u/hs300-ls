@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -20,10 +21,39 @@ import pandas as pd
 from hs300_ls.config import OUTPUT_DIR, PORT
 from hs300_ls.frontier import VARIANTS
 
-SCHEME_IDS = {v["id"] for v in VARIANTS}
-
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).resolve().parent / "ui_static"
+VAR_DIR = OUTPUT_DIR / "variants"
+_ID_RE = re.compile(r"^[A-Za-z0-9_]{1,40}$")
+
+
+def _safe_id(scheme_id: str) -> str | None:
+    sid = (scheme_id or "").strip()
+    if not _ID_RE.fullmatch(sid):
+        return None
+    return sid
+
+
+def _known_ids() -> list[str]:
+    ids: list[str] = []
+    seen: set[str] = set()
+
+    def add(raw: str) -> None:
+        sid = _safe_id(raw)
+        if not sid or sid in seen:
+            return
+        seen.add(sid)
+        ids.append(sid)
+
+    for spec in VARIANTS:
+        add(spec["id"])
+    raw = _frontier_raw()
+    for row in (raw or {}).get("rows") or []:
+        add(str(row.get("id") or ""))
+    if VAR_DIR.exists():
+        for path in VAR_DIR.glob("*_metrics.json"):
+            add(path.name[: -len("_metrics.json")])
+    return ids
 
 
 def _clean(v):
@@ -93,18 +123,19 @@ def load_book() -> dict:
 
 
 def load_scheme(scheme_id: str) -> dict:
-    if scheme_id not in SCHEME_IDS:
+    sid = _safe_id(scheme_id)
+    if not sid:
         return {"ok": False, "error": "未知仓位结构"}
-    metrics_path = OUTPUT_DIR / "variants" / f"{scheme_id}_metrics.json"
+    metrics_path = VAR_DIR / f"{sid}_metrics.json"
     if not metrics_path.exists():
         frontier = _frontier_raw()
-        pack = ((frontier or {}).get("schemes") or {}).get(scheme_id)
+        pack = ((frontier or {}).get("schemes") or {}).get(sid)
         if pack:
             return pack
         return {"ok": False, "error": "还没有该仓位的回测。请先运行 python run_backtest.py"}
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     monthly = []
-    mpath = OUTPUT_DIR / "variants" / f"{scheme_id}_monthly.csv"
+    mpath = VAR_DIR / f"{sid}_monthly.csv"
     if mpath.exists():
         df = pd.read_csv(mpath)
         for _, row in df.iterrows():
@@ -116,16 +147,16 @@ def load_scheme(scheme_id: str) -> dict:
                     "excess": _clean(row["excess"]),
                 }
             )
-    chart = OUTPUT_DIR / "variants" / f"{scheme_id}.png"
+    chart = VAR_DIR / f"{sid}.png"
     pack = {
         "ok": True,
-        "id": scheme_id,
+        "id": sid,
         "metrics": metrics,
         "monthly": monthly,
-        "chart": f"/variants/{scheme_id}.png",
+        "chart": f"/variants/{sid}.png",
         "has_chart": chart.exists(),
     }
-    holdings = _read_holdings(OUTPUT_DIR / "variants" / f"{scheme_id}_holdings.json")
+    holdings = _read_holdings(VAR_DIR / f"{sid}_holdings.json")
     if holdings:
         pack["holdings"] = holdings
     return pack
@@ -146,8 +177,7 @@ def load_frontier() -> dict:
     payload["chart"] = "/frontier.png"
     payload.setdefault("default_id", "now")
     schemes = payload.get("schemes") or {}
-    for spec in VARIANTS:
-        sid = spec["id"]
+    for sid in _known_ids():
         if sid not in schemes or not schemes[sid].get("ok"):
             pack = load_scheme(sid)
             if pack.get("ok"):
@@ -158,7 +188,10 @@ def load_frontier() -> dict:
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
-        sys.stderr.write("[ui] " + (fmt % args) + "\n")
+        msg = fmt % args
+        if "/api/tdx" in msg or "/api/update" in msg:
+            return
+        sys.stderr.write("[ui] " + msg + "\n")
 
     def _send(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
@@ -186,15 +219,45 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/frontier":
             self._json(load_frontier())
             return
+        if path == "/api/update":
+            from hs300_ls.updater import status
+
+            self._json(status())
+            return
+        if path == "/api/tdx":
+            qs = parse_qs(parsed.query)
+            raw = (qs.get("codes") or [""])[0]
+            codes = [c.strip() for c in raw.split(",") if c.strip()] or ["000300.SH"]
+            try:
+                from hs300_ls.tdx import tdx_snap
+
+                self._json(tdx_snap(codes))
+            except Exception as exc:
+                self._json({"ok": False, "connected": False, "label": "通达信未连接", "error": str(exc), "quotes": {}}, 500)
+            return
         if path in {"/book.png", "/frontier.png"}:
             self._png(OUTPUT_DIR / path.lstrip("/"))
             return
         if path.startswith("/variants/") and path.endswith(".png"):
-            sid = path[len("/variants/") : -4]
-            if sid not in SCHEME_IDS:
+            sid = _safe_id(path[len("/variants/") : -4])
+            if not sid:
                 self._send(404, b"not found", "text/plain")
                 return
-            self._png(OUTPUT_DIR / "variants" / f"{sid}.png")
+            self._png(VAR_DIR / f"{sid}.png")
+            return
+        self._send(404, b"not found", "text/plain")
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        path = unquote(parsed.path)
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
+        if path == "/api/update":
+            from hs300_ls.updater import run_once, status
+
+            threading.Thread(target=run_once, kwargs={"force": True}, daemon=True).start()
+            self._json(status())
             return
         self._send(404, b"not found", "text/plain")
 
@@ -253,6 +316,9 @@ def main(argv: list[str] | None = None) -> int:
     url = f"http://127.0.0.1:{port}/"
     print(f"项目二界面  {url}")
     print("关掉这个窗口即退出。理想约束回测，不是投资建议。")
+    from hs300_ls.updater import start_background_loop
+
+    start_background_loop()
     if not args.no_browser:
         threading.Timer(0.4, open_app_window, args=(url,)).start()
     try:

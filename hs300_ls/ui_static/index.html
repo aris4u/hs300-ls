@@ -114,6 +114,17 @@
       cursor: pointer;
     }
     .tab.on { color: var(--text); background: var(--panel-2); border-color: #4a5363; }
+    #updateStatus {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    #updateStatus.warn { color: #e8c48a; }
+    #updateStatus.err { color: #e24c4c; }
+    #updateStatus.on { color: #3dd68c; }
     #view-frontier, #view-target { display: none; }
     #app[data-view="frontier"] #view-book,
     #app[data-view="target"] #view-book { display: none; }
@@ -129,7 +140,43 @@
       gap: 16px;
       margin-bottom: 14px;
     }
-    .hold-grid h4 { margin: 0 0 8px; font-size: 13px; }
+    #clock {
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+      min-width: 168px;
+    }
+    .live-status.on { color: #3dd68c; }
+    .live-status.on::before {
+      content: "";
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      margin-right: 6px;
+      border-radius: 50%;
+      background: #3dd68c;
+      box-shadow: 0 0 0 0 rgba(61, 214, 140, 0.7);
+      animation: livePulse 1.4s ease-out infinite;
+    }
+    @keyframes livePulse {
+      0% { box-shadow: 0 0 0 0 rgba(61, 214, 140, 0.7); }
+      70% { box-shadow: 0 0 0 8px rgba(61, 214, 140, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(61, 214, 140, 0); }
+    }
+    .live-status.warn { color: #d5b35a; }
+    .live-status.err { color: #f1948a; }
+    #tdxTick {
+      margin-left: auto;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 42%;
+    }
+    #tdxTick .pos { color: #e24c4c; }
+    #tdxTick .neg { color: #22a06b; }
   </style>
 </head>
 <body>
@@ -144,22 +191,23 @@
         <button class="tab" data-view="target" type="button">目标仓位</button>
         <button class="tab" data-view="frontier" type="button">超额与回撤</button>
       </div>
+      <span id="updateStatus" title="每约 21 个交易日自动拉数重算仓位；点击可立刻重跑">下次更新日期读取中…</span>
     </header>
     <main>
     <div id="view-book">
       <p class="warn" id="warn">
-        项目二已改成净多头、总敞口约 100%。弱市半仓而不是空仓；卖出计印花税，空头计年化 5% 融券。成交仍是 T+1。主图上看相对现金，以及「账本/沪深300」是否大于 1。不能和项目一那大约 4% 直接比。
+        净多头、总敞口约 100%。弱市半仓而不是空仓；卖出计印花税，空头计年化 5% 融券。成交仍是 T+1。主图上看相对现金，以及「账本/沪深300」是否大于 1。
       </p>
       <section class="overview">
         <h2>方案概述</h2>
-        <div class="overview-name" id="overviewName">理想约束 · 净多头动量（规则事先固定）</div>
+        <div class="overview-name" id="overviewName">理想约束 · 净多头动量</div>
         <dl>
           <dt>仓位</dt><dd id="overviewPos">做多最高 5 只合计约 70%，做空最低 5 只合计约 30%。总敞口约 100%，净敞口约 +40%。沪深300低于 60 日均线时整体降到半仓，不再 100% 空仓。</dd>
           <dt>公式</dt><dd>20 日价格动量，跳过最近 1 日。不跑通达信状态机。不对 2024-09 报告窗口搜参。</dd>
           <dt>成交</dt><dd>T 日收盘出信号，T+1 日开盘成交。约每 21 个交易日换仓。</dd>
           <dt>成本</dt><dd>佣金 3bp + 滑点 5bp + 印花税 10bp（卖出）。空头另计年化 5% 融券费。</dd>
           <dt>怎么读</dt><dd id="overviewHow">上图蓝线是账本、灰线是沪深300，可以直接对比。中图大于 1 表示累计超过指数。净多头只有约 40%，牛市里仍可能一段时间低于满仓指数。</dd>
-          <dt>数据</dt><dd>只读项目一已经下好的沪深300成分前复权日K。当前成分名单，有幸存者偏差。</dd>
+          <dt>数据</dt><dd>默认用 BaoStock 拉当前沪深300成分前复权日K，缓存在本仓库 data/。不跑通达信。当前成分名单，有幸存者偏差。</dd>
         </dl>
       </section>
       <p class="note" id="note"></p>
@@ -194,7 +242,7 @@
     </div>
     <div id="view-frontier">
       <p class="warn">
-        同一套动量公式、同样 T+1 和成本，只改仓位。点一行，回测页换成该仓位的数字和净值图；（当前）永远在点中的那一行。示意图蓝点仍是产品默认 70/30 半仓。满仓只做多那条能到约 300% 相对超额，但回撤不再好看。
+        同一套动量公式、同样 T+1 和成本，只改仓位。点一行，回测页换成该仓位的数字和净值图；（当前）永远在点中的那一行。示意图蓝点仍是产品默认 70/30 半仓。空仓三档（70/30、85/15、只做多）是「允许空仓」对照，不是当前产品。满仓只做多那条能到约 300% 相对超额，但回撤不再好看。
       </p>
       <p class="note" id="frontierNote"></p>
       <h3 class="section-h">仓位结构对照</h3>
@@ -203,7 +251,12 @@
       <div class="chart" id="frontierChart"></div>
     </div>
     </main>
-    <footer>规则提示，不是投资建议。项目一仍在 127.0.0.1:8765，只保留大A指数增强。</footer>
+    <footer>
+      <span id="clock">—</span>
+      规则提示，不是投资建议。
+      <span id="liveStatus" class="live-status">通达信 —</span>
+      <span id="tdxTick"></span>
+    </footer>
   </div>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -226,16 +279,18 @@
       const shortTxt = sg > 0
         ? `，做空最低 5 只合计约 ${(sg * 100).toFixed(0)}%。总敞口约 ${((lg + sg) * 100).toFixed(0)}%，净敞口约 ${((lg - sg) * 100).toFixed(0)}%。`
         : "，不做空。";
-      const riskTxt = rs >= 1
+      const riskTxt = rs <= 0
+        ? "沪深300低于 60 日均线时整体空仓。"
+        : rs >= 1
         ? "沪深300低于 60 日均线时也不降仓。"
-        : `沪深300低于 60 日均线时整体降到 ${(rs * 100).toFixed(0)}% 仓，不再 100% 空仓。`;
+        : `沪深300低于 60 日均线时整体降到 ${(rs * 100).toFixed(0)}% 仓，不空仓。`;
       return longTxt + shortTxt + riskTxt;
     }
 
     function renderOverview(m) {
       const f = m.frozen || {};
       const name = m.scheme_name || m.product || "理想约束 · 净多头动量";
-      $("overviewName").textContent = name + "（规则事先固定）";
+      $("overviewName").textContent = name;
       $("overviewPos").textContent = positionBlurb(f);
       const net = (Number(f.long_gross || 0) - Number(f.short_gross || 0)) * 100;
       $("overviewHow").textContent =
@@ -260,7 +315,8 @@
       const train = (m.samples || {}).train || {};
       const test = (m.samples || {}).test || {};
       const rs = Number((m.frozen || {}).risk_off_scale);
-      const sizeLabel = Math.abs(rs - 0.5) < 1e-6 ? "弱市半仓日" : "弱市降仓日";
+      const sizeLabel = Math.abs(rs) < 1e-6 ? "弱市空仓日" : (Math.abs(rs - 0.5) < 1e-6 ? "弱市半仓日" : "弱市降仓日");
+      const sizeVal = Math.abs(rs) < 1e-6 ? (m.cash_day_share || 0) : (m.half_size_share || 0);
       const cards = [
         ["相对现金净值", signedPct(m.total_return), signClass(m.total_return)],
         ["夏普", m.sharpe == null ? "—" : Number(m.sharpe).toFixed(2), signClass(m.sharpe)],
@@ -270,7 +326,7 @@
         ["Test 净值", test.net_return == null ? "—" : signedPct(test.net_return), signClass(test.net_return)],
         ["月超额胜率", pct(m.month_excess_win || 0, 0)],
         ["净值低于指数", pct(m.under_index_share || 0, 0)],
-        [sizeLabel, pct(m.half_size_share || 0, 0)],
+        [sizeLabel, pct(sizeVal, 0)],
         ["最大回撤", pct(m.max_drawdown), "neg"],
       ];
       $("stats").innerHTML = cards.map(([k, v, c]) =>
@@ -301,13 +357,14 @@
       renderHoldings(pack.holdings);
     }
 
-    function holdRows(rows) {
+    function holdRows(rows, cashGhost) {
       if (!rows || !rows.length) return "";
       return rows.map((r) => `
         <tr>
           <td>${r.name || "—"}</td>
           <td>${r.code || ""}</td>
           <td class="${signClass(r.weight)}">${signedPct(r.weight)}</td>
+          ${cashGhost ? `<td>${r.ref_weight == null ? "—" : signedPct(r.ref_weight)}</td>` : ""}
           <td>${r.score == null ? "—" : signedPct(r.score)}</td>
         </tr>`).join("");
     }
@@ -328,8 +385,11 @@
         : (h.fill_date || "—");
       const nextRb = h.next_rebalance_date
         || (h.bars_to_next != null ? `约 ${h.bars_to_next} 个交易日后` : "样本内尚未到");
+      const rs = Number((book && book.metrics && book.metrics.frozen || {}).risk_off_scale);
       const risk = h.risk_off
-        ? `是（信号日沪深300低于 ${h.index_ma || 60} 日均线，仓位已按规则缩小）`
+        ? (Math.abs(rs) < 1e-6
+          ? `是（信号日沪深300低于 ${h.index_ma || 60} 日均线，按规则空仓）`
+          : `是（信号日沪深300低于 ${h.index_ma || 60} 日均线，仓位已按规则缩小）`)
         : "否（信号日按正常仓）";
       const pairs = [
         ["数据截至", h.asof || "—"],
@@ -341,10 +401,19 @@
         ["空头合计", signedPct(h.short_gross)],
         ["净敞口", signedPct(h.net_gross)],
       ];
+      if (h.cash_at_signal) {
+        pairs.push(["若未空仓 · 多头", signedPct(h.ref_long_gross)]);
+        pairs.push(["若未空仓 · 空头", signedPct(h.ref_short_gross)]);
+      }
       $("targetMeta").innerHTML = pairs.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
-      const head = `<thead><tr><th>名称</th><th>代码</th><th>权重</th><th>动量</th></tr></thead>`;
-      $("longs").innerHTML = head + `<tbody>${holdRows(h.longs) || `<tr><td colspan="4">当日无多头</td></tr>`}</tbody>`;
-      $("shorts").innerHTML = head + `<tbody>${holdRows(h.shorts) || `<tr><td colspan="4">该仓位不做空，或当日无空头</td></tr>`}</tbody>`;
+      const cashGhost = Boolean(h.cash_at_signal);
+      const head = cashGhost
+        ? `<thead><tr><th>名称</th><th>代码</th><th>账本权重</th><th>若未空仓</th><th>动量</th></tr></thead>`
+        : `<thead><tr><th>名称</th><th>代码</th><th>权重</th><th>动量</th></tr></thead>`;
+      const emptyLong = cashGhost ? "空仓，没有可对照的多头" : "当日无多头";
+      const emptyShort = cashGhost ? "空仓且不做空，或没有可对照的空头" : "该仓位不做空，或当日无空头";
+      $("longs").innerHTML = head + `<tbody>${holdRows(h.longs, cashGhost) || `<tr><td colspan="${cashGhost ? 5 : 4}">${emptyLong}</td></tr>`}</tbody>`;
+      $("shorts").innerHTML = head + `<tbody>${holdRows(h.shorts, cashGhost) || `<tr><td colspan="${cashGhost ? 5 : 4}">${emptyShort}</td></tr>`}</tbody>`;
     }
 
     function renderFrontier(pack) {
@@ -390,13 +459,22 @@
     function selectScheme(id, goBook) {
       if (!id) return;
       selectedId = id;
-      const pack = frontier && frontier.schemes && frontier.schemes[id];
-      if (pack && pack.ok) {
-        book = pack;
-        render(pack);
-      }
-      if (frontier) renderFrontier(frontier);
       if (goBook) setView("book");
+      fetch("/api/book?id=" + encodeURIComponent(id)).then((r) => r.json()).then((pack) => {
+        if (!pack || !pack.ok) return;
+        book = pack;
+        if (frontier) {
+          frontier.schemes = frontier.schemes || {};
+          frontier.schemes[id] = pack;
+          renderFrontier(frontier);
+        }
+        render(pack);
+        if ($("app").dataset.view === "target") {
+          $("asof").textContent = pack.holdings && pack.holdings.asof
+            ? `数据截至 ${pack.holdings.asof}　目标仓位`
+            : "目标仓位";
+        }
+      }).catch(() => {});
     }
 
     function setView(v) {
@@ -426,13 +504,168 @@
       t.onclick = () => setView(t.dataset.view);
     });
 
-    fetch("/api/book").then((r) => r.json()).then((d) => { book = d; render(d); }).catch((err) => {
+    function addWeekdays(iso, n) {
+      const d = new Date(iso + "T12:00:00+08:00");
+      let left = Math.max(0, Number(n) || 0);
+      while (left > 0) {
+        d.setDate(d.getDate() + 1);
+        const w = d.getDay();
+        if (w !== 0 && w !== 6) left -= 1;
+      }
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+    function nextDateFromBook(pack) {
+      const h = pack && pack.holdings;
+      if (!h || !h.ok) return null;
+      if (h.next_rebalance_date && h.asof && h.next_rebalance_date > h.asof) return h.next_rebalance_date;
+      if (h.asof && h.bars_to_next != null) return addWeekdays(h.asof, h.bars_to_next);
+      return null;
+    }
+    function showNextUpdate(date) {
+      if (!date) return;
+      setUpdateStatus({ next_update_date: date, cls: "on" });
+    }
+    fetch("/api/book").then((r) => r.json()).then((d) => {
+      book = d;
+      render(d);
+      showNextUpdate(nextDateFromBook(d));
+    }).catch((err) => {
       render({ ok: false, error: String(err) });
     });
     fetch("/api/frontier").then((r) => r.json()).then((d) => {
       frontier = d;
       if ($("app").dataset.view === "frontier") setView("frontier");
     }).catch(() => {});
+
+    let lastGen = null;
+    let lastBookMtime = null;
+    let updateTimer = null;
+    function setUpdateStatus(d) {
+      const el = $("updateStatus");
+      if (!el) return;
+      if (d && d.next_update_date && !d.running && d.step !== "wait" && !d.error) {
+        el.textContent = `下次更新大约 ${d.next_update_date}`;
+      } else {
+        el.textContent = (d && d.label) || "下次更新日期读取中…";
+      }
+      el.className = (d && d.cls) ? d.cls : "";
+      if (d && d.next_update_date) {
+        el.title = `下次大约 ${d.next_update_date} 收盘后自动拉数并重算仓位。点击可立刻重跑。`;
+      }
+    }
+    async function reloadAfterUpdate() {
+      try {
+        const [b, f] = await Promise.all([
+          fetch("/api/book").then((r) => r.json()),
+          fetch("/api/frontier").then((r) => r.json()),
+        ]);
+        book = b;
+        frontier = f;
+        const view = $("app").dataset.view;
+        if (view === "frontier") setView("frontier");
+        else if (view === "target") { renderHoldings(book && book.holdings); setView("target"); }
+        else render(book);
+      } catch (err) {}
+    }
+    async function pollUpdate() {
+      try {
+        const res = await fetch("/api/update");
+        if (!res.ok) {
+          showNextUpdate(nextDateFromBook(book));
+          updateTimer = setTimeout(pollUpdate, 15000);
+          return;
+        }
+        const d = await res.json();
+        setUpdateStatus(d);
+        if (d.generation && lastGen && d.generation !== lastGen) await reloadAfterUpdate();
+        else if (d.book_mtime && lastBookMtime && d.book_mtime !== lastBookMtime) await reloadAfterUpdate();
+        lastGen = d.generation || lastGen;
+        lastBookMtime = d.book_mtime || lastBookMtime;
+        const ms = d.running || d.step === "wait" ? 3000 : 30000;
+        clearTimeout(updateTimer);
+        updateTimer = setTimeout(pollUpdate, ms);
+      } catch (err) {
+        updateTimer = setTimeout(pollUpdate, 15000);
+      }
+    }
+    $("updateStatus").onclick = () => {
+      fetch("/api/update", { method: "POST" }).then((r) => r.json()).then(setUpdateStatus).catch(() => {});
+      clearTimeout(updateTimer);
+      updateTimer = setTimeout(pollUpdate, 1000);
+    };
+    pollUpdate();
+
+    function signPctClass(x) {
+      const n = Number(x);
+      if (!Number.isFinite(n) || n === 0) return "";
+      return n > 0 ? "pos" : "neg";
+    }
+    function fmtQuote(q) {
+      if (!q || q.price == null) return "—";
+      const px = Number(q.price).toFixed(2);
+      if (q.pct == null || Number.isNaN(Number(q.pct))) return px;
+      const n = Number(q.pct);
+      const p = (n * 100).toFixed(2) + "%";
+      return px + " " + (n > 0 ? "+" + p : p);
+    }
+    function setLiveStatus(text, cls) {
+      const el = $("liveStatus");
+      if (!el) return;
+      el.textContent = text;
+      el.className = "live-status" + (cls ? " " + cls : "");
+    }
+    let tdxBusy = false;
+    async function refreshTdx() {
+      if (tdxBusy || document.visibilityState === "hidden") return;
+      tdxBusy = true;
+      try {
+        const res = await fetch("/api/tdx?codes=000300.SH");
+        if (!res.ok) {
+          setLiveStatus("通达信未连接", "err");
+          return;
+        }
+        const d = await res.json();
+        const q = d && d.quotes ? d.quotes["000300.SH"] : null;
+        if (d && d.connected) {
+          setLiveStatus(`通达信已连接 ${d.quote_time || ""}`.trim(), "on");
+          const el = $("tdxTick");
+          if (el) {
+            el.innerHTML = q
+              ? `沪深300 <span class="${signPctClass(q.pct)}">${fmtQuote(q)}</span>`
+              : "";
+          }
+        } else {
+          setLiveStatus("通达信未连接", "err");
+          if ($("tdxTick")) $("tdxTick").textContent = "";
+        }
+      } catch (_) {
+        setLiveStatus("通达信未连接", "err");
+      } finally {
+        tdxBusy = false;
+      }
+    }
+    function tickClock() {
+      const el = $("clock");
+      if (el) {
+        el.textContent = new Intl.DateTimeFormat("zh-CN", {
+          timeZone: "Asia/Shanghai",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          weekday: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        }).format(new Date());
+      }
+      refreshTdx();
+    }
+    tickClock();
+    setInterval(tickClock, 1000);
   </script>
 </body>
 </html>

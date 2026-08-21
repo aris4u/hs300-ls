@@ -50,6 +50,11 @@ def last_target(
     *,
     rebalance_bars: int = REBALANCE_BARS,
     index_ma: int = INDEX_MA,
+    long_gross: float = LONG_GROSS,
+    short_gross: float = SHORT_GROSS,
+    top_n: int = TOP_N,
+    short_n: int = SHORT_N,
+    allow_short: bool = True,
 ) -> dict:
     """最近一次换仓锁定的目标仓位。T 收盘信号，T+1 开盘成交。不是买卖建议。"""
     names = names or {}
@@ -68,8 +73,25 @@ def last_target(
     sc_row = None
     if score is not None and len(score.index):
         sc_row = score.reindex(cal).iloc[sig_i]
+    on_sig = bool(risk_on.reindex(cal).fillna(False).iloc[sig_i])
+    ghost = (not on_sig) and float(w.abs().sum()) < 1e-12 and sc_row is not None
+    ref_longs = pd.Series(dtype=float)
+    ref_shorts = pd.Series(dtype=float)
+    if ghost:
+        sc = pd.to_numeric(sc_row, errors="coerce").dropna()
+        k = max(1, int(top_n))
+        pick_l = sc.nlargest(k)
+        if len(pick_l):
+            ref_longs = pd.Series(float(long_gross) / len(pick_l), index=pick_l.index)
+            longs = pd.Series(0.0, index=pick_l.index)
+        if allow_short and float(short_gross) > 0 and int(short_n) > 0:
+            rest = sc.drop(index=list(pick_l.index), errors="ignore")
+            pick_s = rest.nsmallest(max(1, int(short_n)))
+            if len(pick_s):
+                ref_shorts = pd.Series(-float(short_gross) / len(pick_s), index=pick_s.index)
+                shorts = pd.Series(0.0, index=pick_s.index)
 
-    def _legs(series: pd.Series, side: str) -> list[dict]:
+    def _legs(series: pd.Series, side: str, ref: pd.Series | None = None) -> list[dict]:
         rows = []
         for code, wt in series.items():
             code_s = str(code)
@@ -78,22 +100,34 @@ def last_target(
                 raw = sc_row[code]
                 if pd.notna(raw) and math.isfinite(float(raw)):
                     mom = float(raw)
+            ref_wt = None
+            if ref is not None and code in ref.index:
+                ref_wt = float(ref[code])
             rows.append(
                 {
                     "code": code_s,
                     "name": str(names.get(code_s) or names.get(code) or code_s),
                     "side": side,
                     "weight": float(wt),
+                    "ref_weight": ref_wt,
                     "score": mom,
                 }
             )
         return rows
 
-    on_sig = bool(risk_on.reindex(cal).fillna(False).iloc[sig_i])
     on_asof = bool(risk_on.reindex(cal).fillna(False).iloc[last_i])
     long_sum = float(longs.sum()) if len(longs) else 0.0
     short_sum = float((-shorts).sum()) if len(shorts) else 0.0
     fill_in_sample = fill_i < n
+    note = (
+        "T 日收盘出信号，T+1 日开盘成交。下面是最近一次换仓锁定的目标仓位，用来核对公式，不是当日买卖建议。"
+        "空头按融券假设，不是大A可直接做空。当前成分名单有幸存者偏差。"
+    )
+    if ghost:
+        note = (
+            f"信号日 {cal[sig_i].strftime('%Y-%m-%d')} 沪深300低于 {int(index_ma)} 日均线，这一档按规则空仓，"
+            "账本权重全是 0。下面名单是同日若未空仓会选的票，用来区分 70/30、85/15、只做多，不是成交指令。"
+        )
     return {
         "ok": True,
         "asof": cal[last_i].strftime("%Y-%m-%d"),
@@ -108,17 +142,17 @@ def last_target(
         "risk_on_at_signal": on_sig,
         "risk_on_asof": on_asof,
         "risk_off": not on_sig,
+        "cash_at_signal": ghost,
         "long_gross": long_sum,
         "short_gross": short_sum,
         "net_gross": long_sum - short_sum,
+        "ref_long_gross": float(ref_longs.sum()) if len(ref_longs) else 0.0,
+        "ref_short_gross": float((-ref_shorts).sum()) if len(ref_shorts) else 0.0,
         "n_long": int(len(longs)),
         "n_short": int(len(shorts)),
-        "longs": _legs(longs, "long"),
-        "shorts": _legs(shorts, "short"),
-        "note": (
-            "T 日收盘出信号，T+1 日开盘成交。下面是最近一次换仓锁定的目标仓位，用来核对公式，不是当日买卖建议。"
-            "空头按融券假设，不是大A可直接做空。当前成分名单有幸存者偏差。"
-        ),
+        "longs": _legs(longs, "long", ref_longs if ghost else None),
+        "shorts": _legs(shorts, "short", ref_shorts if ghost else None),
+        "note": note,
     }
 
 

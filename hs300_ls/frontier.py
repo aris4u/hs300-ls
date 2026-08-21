@@ -53,6 +53,15 @@ VARIANTS = [
         "current": True,
     },
     {
+        "id": "cash",
+        "name": "70/30 弱市空仓",
+        "short": "70/30 空仓",
+        "long_gross": 0.70,
+        "short_gross": 0.30,
+        "risk_off_scale": 0.0,
+        "current": False,
+    },
+    {
         "id": "x75",
         "name": "70/30 弱市 75 折",
         "short": "70/30 75折",
@@ -71,12 +80,30 @@ VARIANTS = [
         "current": False,
     },
     {
+        "id": "n85_cash",
+        "name": "85/15 弱市空仓",
+        "short": "85/15 空仓",
+        "long_gross": 0.85,
+        "short_gross": 0.15,
+        "risk_off_scale": 0.0,
+        "current": False,
+    },
+    {
         "id": "long_half",
         "name": "只做多、弱市半仓",
         "short": "只做多 半仓",
         "long_gross": 1.00,
         "short_gross": 0.00,
         "risk_off_scale": 0.50,
+        "current": False,
+    },
+    {
+        "id": "long_cash",
+        "name": "只做多、弱市空仓",
+        "short": "只做多 空仓",
+        "long_gross": 1.00,
+        "short_gross": 0.00,
+        "risk_off_scale": 0.0,
         "current": False,
     },
     {
@@ -145,11 +172,12 @@ def _patch_metrics(metrics: dict, spec: dict) -> dict:
         if sg > 0
         else "不做空。"
     )
-    risk_part = (
-        f"沪深300收盘低于 {INDEX_MA} 日均线时仓位 ×{rs:.0%}，不空仓。"
-        if rs < 1
-        else f"沪深300低于 {INDEX_MA} 日均线时也不降仓。"
-    )
+    if rs <= 0:
+        risk_part = f"沪深300收盘低于 {INDEX_MA} 日均线时空仓。"
+    elif rs < 1:
+        risk_part = f"沪深300收盘低于 {INDEX_MA} 日均线时仓位 ×{rs:.0%}，不空仓。"
+    else:
+        risk_part = f"沪深300低于 {INDEX_MA} 日均线时也不降仓。"
     metrics["scheme"] = spec["id"]
     metrics["scheme_name"] = spec["name"]
     metrics["product"] = spec["name"]
@@ -189,7 +217,15 @@ def _monthly_records(month_df: pd.DataFrame) -> list[dict]:
 
 
 def write_target(spec: dict, weights: pd.DataFrame, risk_on: pd.Series, names: dict, score: pd.DataFrame) -> dict:
-    payload = last_target(weights, risk_on, names, score)
+    payload = last_target(
+        weights,
+        risk_on,
+        names,
+        score,
+        long_gross=spec["long_gross"],
+        short_gross=spec["short_gross"],
+        allow_short=spec["short_gross"] > 0,
+    )
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     VAR_DIR.mkdir(parents=True, exist_ok=True)
     path = VAR_DIR / f"{spec['id']}_holdings.json"
@@ -266,7 +302,8 @@ def plot_frontier(rows: list[dict], path) -> None:
     xs = np.array([r["report_excess_relative"] * 100 for r in rows], dtype=float)
     ys = np.array([r["report_dd"] * 100 for r in rows], dtype=float)
     ax = axes[0]
-    ax.plot(xs, ys, color="#8b949e", lw=1.6, zorder=1)
+    order = np.argsort(xs)
+    ax.plot(xs[order], ys[order], color="#8b949e", lw=1.6, zorder=1)
     for r, x, y in zip(rows, xs, ys):
         color = "#1f6feb" if r["current"] else "#e24c4c"
         ax.scatter([x], [y], s=90 if r["current"] else 64, color=color, zorder=2)
@@ -293,7 +330,7 @@ def plot_frontier(rows: list[dict], path) -> None:
     ax2.bar(idx - w / 2, rel, w, color="#e24c4c", label="相对超额（%）")
     ax2.bar(idx + w / 2, dd, w, color="#1abc9c", label="报告窗口回撤绝对值（%）")
     ax2.set_xticks(idx)
-    ax2.set_xticklabels(labels, fontsize=9)
+    ax2.set_xticklabels(labels, fontsize=8, rotation=18, ha="right")
     ax2.set_title("同一方向：超额柱升高，回撤柱也升高", fontsize=12, pad=8)
     ax2.set_ylabel("百分比", fontsize=10)
     ax2.legend(loc="upper left", fontsize=9)
@@ -342,7 +379,7 @@ def run_frontier() -> dict:
         "note": (
             "同一套 20 日动量、T+1 开盘、佣金/滑点/印花税/融券。只改仓位结构。"
             "不是在报告窗口上搜参。点一行，回测页换成该仓位；（当前）跟着点中的行。"
-            "示意图蓝点仍是产品默认 70/30 半仓。"
+            "示意图蓝点仍是产品默认 70/30 半仓。空仓三档（70/30、85/15、只做多）是「允许空仓」对照，不是当前产品。"
         ),
         "rows": rows,
         "schemes": schemes,

@@ -3,7 +3,8 @@
 成交仍是 T 日收盘信号、T+1 开盘。
 总敞口约 100%（多 70% / 空 30%），净敞口约 +40%。
 弱市不空仓，只降到半仓。空头计印花税和年化融券费。
-价格只读项目一已经下好的日K，不改项目一文件。
+价格默认自己用 BaoStock 拉日K，缓存在本仓库 data/。不改项目一文件。
+项目一的 pickle 只在本仓库还没有日K时作为后备。
 """
 
 from __future__ import annotations
@@ -13,10 +14,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = ROOT / "output"
+DATA_DIR = ROOT / "data"
+STOCK_DIR = DATA_DIR / "stocks"
+MEMBERS_FILE = DATA_DIR / "hs300_members.csv"
+INDEX_FILE = DATA_DIR / "hs300.csv"
+UNIVERSE_CACHE = OUTPUT_DIR / "universe.pkl"
 
 VIBE2_ROOT = Path(os.environ.get("VIBE2_ROOT", ROOT.parent / "vibe2")).resolve()
-PRICE_CACHE = VIBE2_ROOT / "output" / "enhance_opt" / "universe_v1.pkl"
-STOCK_DIR = VIBE2_ROOT / "data" / "stocks"
+VIBE2_PRICE_CACHE = VIBE2_ROOT / "output" / "enhance_opt" / "universe_v1.pkl"
+# 兼容旧名
+PRICE_CACHE = UNIVERSE_CACHE
+
+PRICE_START = "20100101"
 
 FULL_START = "2010-07-01"
 TRAIN_START = "2010-07-01"
